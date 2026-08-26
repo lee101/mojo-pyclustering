@@ -1,6 +1,5 @@
 """Dense clustering kernels over caller-owned buffers."""
 
-from std.algorithm import parallelize
 from std.math import pow, sqrt
 from std.sys.info import simd_width_of
 
@@ -531,7 +530,8 @@ def kmedoids_process(
                         ranges,
                     )
 
-            parallelize[evaluate_batch](task_count, task_count)
+            for task in range(task_count):
+                evaluate_batch(task)
         else:
             for candidate in range(rows):
                 medoid_evaluate_candidate(
