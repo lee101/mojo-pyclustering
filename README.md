@@ -76,11 +76,11 @@ benchmark, with identical contiguous `float64` input for both implementations.
 
 | case | Mojo | upstream | upstream / Mojo |
 | --- | ---: | ---: | ---: |
-| kmeans.process (100k x 8, k=6) | 15.85 ms | 2141.46 ms | 135.07x faster |
-| kmeans.predict (200k x 8, k=6) | 8.27 ms | 1816.09 ms | 219.49x faster |
-| kmedians.process (60k x 6, k=5) | 13.19 ms | 1217.58 ms | 92.32x faster |
-| kmedoids.process (900 x 5, k=4) | 61.83 ms | 261.77 ms | 4.23x faster |
-| dbscan.process (3k x 2) | 30.73 ms | 258.39 ms | 8.41x faster |
+| kmeans.process (100k x 8, k=6) | 10.65 ms | 1715.69 ms | 161.07x faster |
+| kmeans.predict (200k x 8, k=6) | 6.12 ms | 1956.98 ms | 319.91x faster |
+| kmedians.process (60k x 6, k=5) | 11.52 ms | 1037.14 ms | 90.04x faster |
+| kmedoids.process (900 x 5, k=4) | 9.16 ms | 222.39 ms | 24.28x faster |
+| dbscan.process (3k x 2) | 27.08 ms | 191.39 ms | 7.07x faster |
 
 Upstream's CCORE implementation is used for the processing benchmarks. In
 pyclustering 0.10.1.2, a CCORE k-means fit leaves `predict()` with list centers
@@ -89,7 +89,10 @@ benchmark therefore prepares the upstream model with `ccore=False` and times
 only its public prediction implementation. `pixi run bench` holds a
 machine-wide lock and prints the reproducible Markdown table.
 
-No GPU path is included or claimed.
+No GPU path is included or claimed. The covered hot loops are distance scans
+with about two arithmetic operations per 16 bytes of point data, well below the
+roughly 2-flop-per-byte threshold where device transfer and launch costs can pay
+off. They remain CPU kernels rather than adding a GPU path that loses.
 
 ## How it works
 

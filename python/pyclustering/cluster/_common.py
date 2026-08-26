@@ -43,7 +43,7 @@ def metric_parts(metric: distance_metric, dimensions: int, data=None):
 
 
 def labels_to_clusters(labels: np.ndarray, amount: int) -> list[list[int]]:
-    return [np.flatnonzero(labels == index).astype(int).tolist() for index in range(amount)]
+    return [np.flatnonzero(labels == index).tolist() for index in range(amount)]
 
 
 def predict(data, centers, metric):

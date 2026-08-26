@@ -315,6 +315,12 @@ def test_ffi_address_rejects_wrong_layout_dtype_and_empty():
         addr(np.ones(2, dtype=np.float32))
 
 
+def test_contiguous_float64_input_remains_zero_copy():
+    data = np.arange(24, dtype=np.float64).reshape(12, 2)
+    model = kmeans(data, data[[0, 11]])
+    assert np.shares_memory(model._data, data)
+
+
 @pytest.mark.parametrize(
     "factory",
     [

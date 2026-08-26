@@ -48,7 +48,7 @@ class dbscan:
         )
         self._labels = labels
         self._clusters = labels_to_clusters(labels, amount)
-        self._noise = np.flatnonzero(labels < 0).astype(int).tolist()
+        self._noise = np.flatnonzero(labels < 0).tolist()
         return self
 
     def get_clusters(self):

@@ -1,12 +1,52 @@
 """Dense clustering kernels over caller-owned buffers."""
 
 from std.math import pow, sqrt
-from std.sys.info import simd_width_of
+from std.runtime import initialize_runtime
+from std.runtime.asyncrt import TaskGroup
+from std.sys.info import simd_width_of as simdwidthof
 
 comptime FPtr = UnsafePointer[Float64, AnyOrigin[mut=True]]
 comptime IPtr = UnsafePointer[Int64, AnyOrigin[mut=True]]
-comptime W = simd_width_of[DType.float64]()
+comptime W = simdwidthof[DType.float64]()
 comptime INF = 1.7976931348623157e308
+
+
+@always_inline
+def sync_parallelize[FuncType: def(Int) -> None](func: FuncType, count: Int):
+    @__parameter
+    @always_inline
+    def wrapped(index: Int):
+        func(index)
+
+    @always_inline
+    @__parameter
+    async def task_fn(index: Int):
+        wrapped(index)
+
+    var tasks = TaskGroup()
+    for index in range(count):
+        tasks.create_task(task_fn(index))
+    tasks.wait()
+
+
+@always_inline
+def parallelize[
+    origins: OriginSet,
+    //,
+    func: def(Int) capturing[origins] -> None,
+](num_work_items: Int, num_workers: Int):
+    def unified_func(index: Int):
+        func(index)
+
+    var chunk_size, extra_items = divmod(num_work_items, num_workers)
+
+    @always_inline
+    def worker(worker_index: Int) {imm chunk_size, imm extra_items}:
+        var start = worker_index * chunk_size + min(worker_index, extra_items)
+        for index in range(chunk_size + Int(worker_index < extra_items)):
+            unified_func(start + index)
+
+    sync_parallelize(worker, num_workers)
 
 
 @always_inline
@@ -504,6 +544,8 @@ def kmedoids_process(
         )
     var changes = INF
     var iteration = 0
+    if rows >= 256:
+        initialize_runtime()
     while changes > tolerance and iteration < itermax:
         if rows >= 256:
             var task_count = min(36, (rows + 31) // 32)
@@ -530,8 +572,7 @@ def kmedoids_process(
                         ranges,
                     )
 
-            for task in range(task_count):
-                evaluate_batch(task)
+            parallelize[evaluate_batch](task_count, task_count)
         else:
             for candidate in range(rows):
                 medoid_evaluate_candidate(
