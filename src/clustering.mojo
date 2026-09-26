@@ -1,8 +1,6 @@
 """Dense clustering kernels over caller-owned buffers."""
 
 from std.math import pow, sqrt
-from std.runtime import initialize_runtime
-from std.runtime.asyncrt import TaskGroup
 from std.sys.info import simd_width_of as simdwidthof
 
 comptime FPtr = UnsafePointer[Float64, AnyOrigin[mut=True]]
@@ -11,42 +9,6 @@ comptime W = simdwidthof[DType.float64]()
 comptime INF = 1.7976931348623157e308
 
 
-@always_inline
-def sync_parallelize[FuncType: def(Int) -> None](func: FuncType, count: Int):
-    @__parameter
-    @always_inline
-    def wrapped(index: Int):
-        func(index)
-
-    @always_inline
-    @__parameter
-    async def task_fn(index: Int):
-        wrapped(index)
-
-    var tasks = TaskGroup()
-    for index in range(count):
-        tasks.create_task(task_fn(index))
-    tasks.wait()
-
-
-@always_inline
-def parallelize[
-    origins: OriginSet,
-    //,
-    func: def(Int) capturing[origins] -> None,
-](num_work_items: Int, num_workers: Int):
-    def unified_func(index: Int):
-        func(index)
-
-    var chunk_size, extra_items = divmod(num_work_items, num_workers)
-
-    @always_inline
-    def worker(worker_index: Int) {imm chunk_size, imm extra_items}:
-        var start = worker_index * chunk_size + min(worker_index, extra_items)
-        for index in range(chunk_size + Int(worker_index < extra_items)):
-            unified_func(start + index)
-
-    sync_parallelize(worker, num_workers)
 
 
 @always_inline
@@ -509,7 +471,38 @@ def medoid_evaluate_candidate(
                 )
 
 
-def kmedoids_process(
+def kmedoids_init(
+    data: FPtr,
+    medoids: IPtr,
+    labels: IPtr,
+    first_distances: FPtr,
+    second_distances: FPtr,
+    rows: Int,
+    dimensions: Int,
+    active: Int,
+    data_type: Int,
+    metric: Int,
+    degree: Float64,
+    ranges: FPtr,
+) -> Float64:
+    """Initial assignment; returns the total deviation the loop compares against."""
+    return medoid_assign(
+        data,
+        medoids,
+        labels,
+        first_distances,
+        second_distances,
+        rows,
+        dimensions,
+        active,
+        data_type,
+        metric,
+        degree,
+        ranges,
+    )
+
+
+def kmedoids_evaluate_range(
     data: FPtr,
     medoids: IPtr,
     labels: IPtr,
@@ -518,124 +511,117 @@ def kmedoids_process(
     costs: FPtr,
     rows: Int,
     dimensions: Int,
-    cluster_count: Int,
-    itermax: Int,
-    tolerance: Float64,
+    active: Int,
+    data_type: Int,
+    metric: Int,
+    degree: Float64,
+    ranges: FPtr,
+    first_candidate: Int,
+    last_candidate: Int,
+):
+    """Score candidates [first_candidate, last_candidate) into the cost matrix.
+
+    Each candidate writes only its own column, so disjoint ranges are
+    independent and the Python shim can fan them out over a thread pool.
+    """
+    for candidate in range(first_candidate, last_candidate):
+        medoid_evaluate_candidate(
+            data,
+            medoids,
+            labels,
+            first_distances,
+            second_distances,
+            costs,
+            candidate,
+            rows,
+            dimensions,
+            active,
+            data_type,
+            metric,
+            degree,
+            ranges,
+        )
+
+
+def kmedoids_select(
+    medoids: IPtr,
+    costs: FPtr,
+    rows: Int,
+    active: Int,
+) -> Int:
+    """Move the best-cost candidate into its medoid; -1 when every cost is INF."""
+    var best_cost = INF
+    var best_cluster = -1
+    var best_candidate = -1
+    for cluster in range(active):
+        for candidate in range(rows):
+            var cost = costs[cluster * rows + candidate]
+            if cost < best_cost:
+                best_cost = cost
+                best_cluster = cluster
+                best_candidate = candidate
+    if best_cluster >= 0:
+        medoids[best_cluster] = Int64(best_candidate)
+    return best_cluster
+
+
+def kmedoids_reassign(
+    data: FPtr,
+    medoids: IPtr,
+    labels: IPtr,
+    first_distances: FPtr,
+    second_distances: FPtr,
+    rows: Int,
+    dimensions: Int,
+    active: Int,
+    data_type: Int,
+    metric: Int,
+    degree: Float64,
+    ranges: FPtr,
+) -> Float64:
+    return medoid_assign(
+        data,
+        medoids,
+        labels,
+        first_distances,
+        second_distances,
+        rows,
+        dimensions,
+        active,
+        data_type,
+        metric,
+        degree,
+        ranges,
+    )
+
+
+def kmedoids_compact(
+    data: FPtr,
+    medoids: IPtr,
+    labels: IPtr,
+    first_distances: FPtr,
+    second_distances: FPtr,
+    rows: Int,
+    dimensions: Int,
+    active: Int,
     data_type: Int,
     metric: Int,
     degree: Float64,
     ranges: FPtr,
 ) -> Int:
-    var active = cluster_count
-    if itermax > 0:
-        _ = medoid_assign(
-            data,
-            medoids,
-            labels,
-            first_distances,
-            second_distances,
-            rows,
-            dimensions,
-            active,
-            data_type,
-            metric,
-            degree,
-            ranges,
-        )
-    var changes = INF
-    var iteration = 0
-    if rows >= 256:
-        initialize_runtime()
-    while changes > tolerance and iteration < itermax:
-        if rows >= 256:
-            var task_count = min(36, (rows + 31) // 32)
-            var batch_size = (rows + task_count - 1) // task_count
-
-            def evaluate_batch(task: Int) capturing:
-                var begin = task * batch_size
-                var end = min(rows, begin + batch_size)
-                for candidate in range(begin, end):
-                    medoid_evaluate_candidate(
-                        data,
-                        medoids,
-                        labels,
-                        first_distances,
-                        second_distances,
-                        costs,
-                        candidate,
-                        rows,
-                        dimensions,
-                        active,
-                        data_type,
-                        metric,
-                        degree,
-                        ranges,
-                    )
-
-            parallelize[evaluate_batch](task_count, task_count)
-        else:
-            for candidate in range(rows):
-                medoid_evaluate_candidate(
-                    data,
-                    medoids,
-                    labels,
-                    first_distances,
-                    second_distances,
-                    costs,
-                    candidate,
-                    rows,
-                    dimensions,
-                    active,
-                    data_type,
-                    metric,
-                    degree,
-                    ranges,
-                )
-
-        var best_cost = INF
-        var best_cluster = -1
-        var best_candidate = -1
-        for cluster in range(active):
-            for candidate in range(rows):
-                var cost = costs[cluster * rows + candidate]
-                if cost < best_cost:
-                    best_cost = cost
-                    best_cluster = cluster
-                    best_candidate = candidate
-        if best_cluster < 0:
-            break
-        medoids[best_cluster] = Int64(best_candidate)
-        var previous = 0.0
-        for row in range(rows):
-            previous += first_distances[row]
-        var current = medoid_assign(
-            data,
-            medoids,
-            labels,
-            first_distances,
-            second_distances,
-            rows,
-            dimensions,
-            active,
-            data_type,
-            metric,
-            degree,
-            ranges,
-        )
-        changes = previous - current
-        iteration += 1
-
+    """Drop clusters that ended up empty, keeping medoid order stable."""
+    var remaining = active
     var cluster = 0
-    while cluster < active:
+    while cluster < remaining:
         var found = False
         for row in range(rows):
             if Int(labels[row]) == cluster:
                 found = True
                 break
         if not found:
-            for later in range(cluster + 1, active):
+            for later in range(cluster + 1, remaining):
                 medoids[later - 1] = medoids[later]
-            active -= 1
+            remaining -= 1
             _ = medoid_assign(
                 data,
                 medoids,
@@ -644,7 +630,7 @@ def kmedoids_process(
                 second_distances,
                 rows,
                 dimensions,
-                active,
+                remaining,
                 data_type,
                 metric,
                 degree,
@@ -652,7 +638,7 @@ def kmedoids_process(
             )
         else:
             cluster += 1
-    return active
+    return remaining
 
 
 @always_inline

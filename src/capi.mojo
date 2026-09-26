@@ -5,7 +5,11 @@ from clustering import (
     dbscan_points,
     kmeans_process,
     kmedians_process,
-    kmedoids_process,
+    kmedoids_compact,
+    kmedoids_evaluate_range,
+    kmedoids_init,
+    kmedoids_reassign,
+    kmedoids_select,
     metric_distance,
 )
 
@@ -131,8 +135,39 @@ def mpc_kmedians(
     )
 
 
-@export("mpc_kmedoids")
-def mpc_kmedoids(
+@export("mpc_kmedoids_init")
+def mpc_kmedoids_init(
+    data: Int,
+    medoids: Int,
+    labels: Int,
+    first_distances: Int,
+    second_distances: Int,
+    rows: Int,
+    dimensions: Int,
+    active: Int,
+    data_type: Int,
+    metric: Int,
+    degree: Float64,
+    ranges: Int,
+) abi("C") -> Float64:
+    return kmedoids_init(
+        fp(data),
+        ip(medoids),
+        ip(labels),
+        fp(first_distances),
+        fp(second_distances),
+        rows,
+        dimensions,
+        active,
+        data_type,
+        metric,
+        degree,
+        fp(ranges),
+    )
+
+
+@export("mpc_kmedoids_evaluate")
+def mpc_kmedoids_evaluate(
     data: Int,
     medoids: Int,
     labels: Int,
@@ -141,15 +176,15 @@ def mpc_kmedoids(
     costs: Int,
     rows: Int,
     dimensions: Int,
-    clusters: Int,
-    itermax: Int,
-    tolerance: Float64,
+    active: Int,
     data_type: Int,
     metric: Int,
     degree: Float64,
     ranges: Int,
-) abi("C") -> Int:
-    return kmedoids_process(
+    first_candidate: Int,
+    last_candidate: Int,
+) abi("C"):
+    kmedoids_evaluate_range(
         fp(data),
         ip(medoids),
         ip(labels),
@@ -158,9 +193,81 @@ def mpc_kmedoids(
         fp(costs),
         rows,
         dimensions,
-        clusters,
-        itermax,
-        tolerance,
+        active,
+        data_type,
+        metric,
+        degree,
+        fp(ranges),
+        first_candidate,
+        last_candidate,
+    )
+
+
+@export("mpc_kmedoids_select")
+def mpc_kmedoids_select(
+    medoids: Int,
+    costs: Int,
+    rows: Int,
+    active: Int,
+) abi("C") -> Int:
+    return kmedoids_select(ip(medoids), fp(costs), rows, active)
+
+
+@export("mpc_kmedoids_reassign")
+def mpc_kmedoids_reassign(
+    data: Int,
+    medoids: Int,
+    labels: Int,
+    first_distances: Int,
+    second_distances: Int,
+    rows: Int,
+    dimensions: Int,
+    active: Int,
+    data_type: Int,
+    metric: Int,
+    degree: Float64,
+    ranges: Int,
+) abi("C") -> Float64:
+    return kmedoids_reassign(
+        fp(data),
+        ip(medoids),
+        ip(labels),
+        fp(first_distances),
+        fp(second_distances),
+        rows,
+        dimensions,
+        active,
+        data_type,
+        metric,
+        degree,
+        fp(ranges),
+    )
+
+
+@export("mpc_kmedoids_compact")
+def mpc_kmedoids_compact(
+    data: Int,
+    medoids: Int,
+    labels: Int,
+    first_distances: Int,
+    second_distances: Int,
+    rows: Int,
+    dimensions: Int,
+    active: Int,
+    data_type: Int,
+    metric: Int,
+    degree: Float64,
+    ranges: Int,
+) abi("C") -> Int:
+    return kmedoids_compact(
+        fp(data),
+        ip(medoids),
+        ip(labels),
+        fp(first_distances),
+        fp(second_distances),
+        rows,
+        dimensions,
+        active,
         data_type,
         metric,
         degree,

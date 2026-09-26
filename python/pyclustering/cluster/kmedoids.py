@@ -2,12 +2,34 @@
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 
-from pyclustering._lib import addr, exact_int, f64, i64, lib
+from pyclustering._lib import addr, exact_int, i64, lib
 from pyclustering.cluster._common import labels_to_clusters, metric_parts, points, predict
 from pyclustering.cluster.encoder import type_encoding
 from pyclustering.utils.metric import distance_metric, type_metric
+
+# Scoring one candidate costs O(rows * dimensions), so the sweep is
+# compute-bound and fans out over a thread pool.  Small inputs stay serial:
+# below this many candidates the hand-off costs more than the work it saves.
+_PARALLEL_MIN_CANDIDATES = 256
+_MAX_WORKERS = min(32, os.cpu_count() or 1)
+
+
+def _candidate_parts(rows: int, parallel: bool) -> list[tuple[int, int]]:
+    if not parallel or rows < _PARALLEL_MIN_CANDIDATES:
+        return [(0, rows)]
+    workers = min(_MAX_WORKERS, rows)
+    parts = []
+    for index in range(workers):
+        first = (index * rows) // workers
+        last = ((index + 1) * rows) // workers
+        if first < last:
+            parts.append((first, last))
+    return parts
 
 
 class kmedoids:
@@ -40,30 +62,80 @@ class kmedoids:
             return self
         rows = len(self._data)
         dimensions = self._data.shape[1]
+        active = len(self._medoids)
         labels = np.empty(rows, dtype=np.int64)
         first = np.empty(rows, dtype=np.float64)
         second = np.empty(rows, dtype=np.float64)
-        costs = np.empty((len(self._medoids), rows), dtype=np.float64)
+        costs = np.empty((active, rows), dtype=np.float64)
         kind, degree, ranges = metric_parts(
             self._metric, dimensions, None if self._data_type == "distance_matrix" else self._data
         )
-        active = lib().mpc_kmedoids(
-            addr(self._data),
-            addr(self._medoids),
-            addr(labels),
-            addr(first),
-            addr(second),
-            addr(costs),
-            rows,
-            dimensions,
-            len(self._medoids),
-            self._itermax,
-            self._tolerance,
+        metric_args = (
             int(self._data_type == "distance_matrix"),
             kind,
             degree,
             addr(ranges),
         )
+        common = (
+            addr(self._data),
+            addr(self._medoids),
+            addr(labels),
+            addr(first),
+            addr(second),
+            rows,
+            dimensions,
+            active,
+        )
+        parts = _candidate_parts(rows, _MAX_WORKERS > 1)
+        # medoid_assign returns sum(first_distances) accumulated in row order,
+        # which is exactly the `previous` total the fused kernel used as its
+        # convergence baseline, so the two agree bit for bit.
+        previous = lib().mpc_kmedoids_init(*common, *metric_args)
+        with ThreadPoolExecutor(max_workers=len(parts)) as pool:
+            for _ in range(self._itermax):
+                if len(parts) > 1:
+                    list(pool.map(
+                        lambda part: lib().mpc_kmedoids_evaluate(
+                            addr(self._data),
+                            addr(self._medoids),
+                            addr(labels),
+                            addr(first),
+                            addr(second),
+                            addr(costs),
+                            rows,
+                            dimensions,
+                            active,
+                            *metric_args,
+                            part[0],
+                            part[1],
+                        ),
+                        parts,
+                    ))
+                else:
+                    lib().mpc_kmedoids_evaluate(
+                        addr(self._data),
+                        addr(self._medoids),
+                        addr(labels),
+                        addr(first),
+                        addr(second),
+                        addr(costs),
+                        rows,
+                        dimensions,
+                        active,
+                        *metric_args,
+                        parts[0][0],
+                        parts[0][1],
+                    )
+                if lib().mpc_kmedoids_select(
+                    addr(self._medoids), addr(costs), rows, active
+                ) < 0:
+                    break
+                current = lib().mpc_kmedoids_reassign(*common, *metric_args)
+                changes = previous - current
+                previous = current
+                if changes <= self._tolerance:
+                    break
+        active = lib().mpc_kmedoids_compact(*common, *metric_args)
         self._medoids = self._medoids[:active].copy()
         self._labels = labels
         self._clusters = labels_to_clusters(labels, active)

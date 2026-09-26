@@ -24,7 +24,11 @@ _SIGNATURES = {
     "mpc_assign": ([I, I, I, I, I, I, I, I, F, I], F),
     "mpc_kmeans": ([I] * 11 + [F, I, F, I], I),
     "mpc_kmedians": ([I] * 12 + [F, I, F, I], I),
-    "mpc_kmedoids": ([I] * 10 + [F, I, I, F, I], I),
+    "mpc_kmedoids_init": ([I] * 10 + [F, I], F),
+    "mpc_kmedoids_evaluate": ([I] * 11 + [F, I, I, I], None),
+    "mpc_kmedoids_select": ([I, I, I, I], I),
+    "mpc_kmedoids_reassign": ([I] * 10 + [F, I], F),
+    "mpc_kmedoids_compact": ([I] * 10 + [F, I], I),
     "mpc_dbscan": ([I, I, I, I, I, I, I, F, I, I], I),
 }
 
